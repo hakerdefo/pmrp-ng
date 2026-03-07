@@ -2,6 +2,10 @@
 # ========================================================================
 # PMRP-NG: The Launchpad Edition (v1.0) 🏆
 # The ultimate, accessible, and resilient terminal radio for everybody.
+# Author: hakerdefo
+# Repository: https://github.com/hakerdefo/pmrp-ng
+# License: MIT
+# Year: 2026
 # ========================================================================
 
 # --- Colors & Typography ---
@@ -161,7 +165,7 @@ play_station() {
     echo -e "   ${BOLD}🎶 Station:${NC} ${YELLOW}$name${NC}"
     echo -e "   ${BOLD}🌍 Stream :${NC} ${CYAN}$display_url${NC}"
     echo -e "${BLUE}╰──────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "  ${CYAN}Controls:${NC} ${BOLD}[q]${NC} or ${BOLD}[Ctrl+C]${NC} to Stop  |  ${BOLD}[9/0]${NC} Volume\n"
+    echo -e "  ${CYAN}Controls:${NC} ${BOLD}[q]${NC} to Stop  |  ${BOLD}[Space]${NC} to Pause  |  ${BOLD}[9/0]${NC} Volume\n"
     
     mpv --no-video --user-agent="$USER_AGENT" --msg-level=all=no --msg-level=cplayer=info "$url"
 
