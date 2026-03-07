@@ -35,7 +35,7 @@ brew install curl jq mpv fzf
 
 ### 2. Installation Methods
 
-Download [pmrp-ng-master] zip, extract its contents and copy the file `pmrp-ng` to `/usr/local/bin` directory:
+Download [pmrp-ng] zip, extract its contents and copy the file `pmrp-ng` to `/usr/local/bin` directory:
 ```sh
 sudo cp pmrp-ng /usr/local/bin/
 ```
@@ -84,4 +84,4 @@ This work (<span property="dct:title">pmrp</span>, by [<span property="dct:title
 
 *Created with ❤️ and 🎼 by hakerdefo.*
 
-[pmrp--ng-master]:https://github.com/hakerdefo/pmrp-ng/archive/master.zip
+[pmrp-ng]:https://github.com/hakerdefo/pmrp-ng/archive/refs/heads/main.zip
