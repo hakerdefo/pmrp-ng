@@ -60,6 +60,7 @@ Open terminal, run `pmrp-ng`, select a station according to your mood and don't 
 ## 🕹️ Controls
 
 Once a station is playing, `mpv` handles the stream. 
+* **`Space`** or **`p`** : Pause the playback.
 * **`q`** or **`Ctrl+C`** : Stop playback and return to the menu.
 * **`9`** and **`0`** : Decrease / Increase volume.
 
@@ -69,7 +70,7 @@ The original `pmrp` was created over a decade ago, relying on `mpg123` and hardc
 
 ## 🙏 Support
 
-If you like **pmrp-ng**, please consider supporting it, even the smallest contribution goes a long way. It is quick & easy via PayPal, Buy Me a Coffee or Liberapay:  
+If you like `pmrp-ng`, please consider supporting it, even the smallest contribution goes a long way. It is quick & easy via PayPal, Buy Me a Coffee or Liberapay:  
 
 [![Support via PayPal](https://cdn.jsdelivr.net/gh/twolfson/paypal-github-button@1.0.0/dist/button.svg)](https://paypal.me/hakerdefo)  
 [!["Buy Me A Coffee"](https://user-images.githubusercontent.com/1376749/120938564-50c59780-c6e1-11eb-814f-22a0399623c5.png)](https://www.buymeacoffee.com/hakerdefo)  
@@ -77,8 +78,9 @@ If you like **pmrp-ng**, please consider supporting it, even the smallest contri
 
 ## 🪪 License
 
-[![Public Domain Mark](http://i.creativecommons.org/p/mark/1.0/88x31.png)](http://creativecommons.org/publicdomain/mark/1.0/)  
-This work (<span property="dct:title">pmrp</span>, by [<span property="dct:title">hakerdefo</span>](https://github.com/hakerdefo/pmrp-ng)), identified by [<span property="dct:title">hakerdefo</span>](https://hakerdefo.github.io), is free of known copyright restrictions.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[PMRP-NG](https://github.com/hakerdefo/pmrp-ng) is released under the [MIT License](LICENSE).
 
 ---
 
