@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# ========================================================================
+# PMRP-NG: The Launchpad Edition (v1.0) 🏆
+# The ultimate, accessible, and resilient terminal radio for everybody.
+# ========================================================================
+
+# --- Colors & Typography ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# --- Configuration ---
+USER_AGENT="PMRP-NG/1.0"
+SELECTED_HOST=""
+FAV_FILE="$HOME/.pmrp_favorites.txt"
+
+# --- Graceful Cleanup ---
+trap 'tput cnorm' EXIT
+
+quit_app() {
+    echo -e "\n${GREEN}👋 Exiting PMRP. Thanks for listening!${NC}"
+    exit 0
+}
+
+# --- Helper Utilities ---
+trim() {
+    echo "$1" | sed 's/^[ \t]*//;s/[ \t]*$//'
+}
+
+# --- System Check ---
+check_system() {
+    local missing=()
+    for cmd in curl jq mpv fzf column; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}${BOLD}🛠️  System Check Failed${NC}"
+        echo -e "You are missing some essential tools to run PMRP: ${YELLOW}${missing[*]}${NC}\n"
+        
+        echo -e "${CYAN}How to fix this:${NC}"
+        if command -v apt-get &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo apt-get install ${missing[*]}${NC}"
+        elif command -v brew &>/dev/null; then
+            echo -e "  Run: ${GREEN}brew install ${missing[*]}${NC}"
+        elif command -v dnf &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo dnf install ${missing[*]}${NC}"
+        elif command -v pacman &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo pacman -S ${missing[*]}${NC}"
+        else
+            echo -e "  Please use your package manager to install: ${YELLOW}${missing[*]}${NC}"
+        fi
+        exit 1
+    fi
+}
+
+# --- Establishing Instant Dynamic Uplink ---
+get_api() {
+    echo -ne "${CYAN}🌍 Discovering available radio servers... ${NC}"
+    
+    local fetched_hosts hosts_to_check=()
+    fetched_hosts=$(curl -s --connect-timeout 30 https://all.api.radio-browser.info/json/servers | jq -r '.[].name' 2>/dev/null)
+    
+    if [[ -n "$fetched_hosts" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && hosts_to_check+=("$line")
+        done <<< "$fetched_hosts"
+    else
+        hosts_to_check=("at1.api.radio-browser.info" "de1.api.radio-browser.info" "de2.api.radio-browser.info" "fi1.api.radio-browser.info" "fr1.api.radio-browser.info" "nl1.api.radio-browser.info")
+    fi
+
+    # Fast Native Bash Fisher-Yates Shuffle
+    local i j tmp
+    for ((i=${#hosts_to_check[@]}-1; i>0; i--)); do
+        j=$((RANDOM % (i+1)))
+        tmp="${hosts_to_check[i]}"
+        hosts_to_check[i]="${hosts_to_check[j]}"
+        hosts_to_check[j]="$tmp"
+    done
+
+    local connected=false
+    for host in "${hosts_to_check[@]}"; do
+        if curl -s --connect-timeout 30 --max-time 60 "https://$host/json/stats" > /dev/null; then
+            SELECTED_HOST="https://$host"
+            connected=true
+            echo -e "${GREEN}Connected! ($host)${NC}"
+            break
+        fi
+    done
+
+    if [[ "$connected" == false ]]; then
+        echo -e "${RED}\n❌ Failed to connect to any radio servers. Please check your internet connection.${NC}"
+        exit 1
+    fi
+}
+
+# --- The Star Map (Favorites System) ---
+play_favorites() {
+    if [[ ! -s "$FAV_FILE" ]]; then
+        echo -e "${YELLOW}⭐ Your library is empty! Search for a station and save it first.${NC}"
+        sleep 2
+        return
+    fi
+
+    local selection url name
+    selection=$(fzf --ansi \
+        --prompt="⭐ Search Favorites: " \
+        --header="[Enter] Play  |  [Esc] Menu" \
+        --color="header:italic:cyan,prompt:yellow,pointer:magenta,hl:green" \
+        --border="rounded" \
+        --layout="reverse" \
+        --info="inline" \
+        --cycle \
+        < "$FAV_FILE")
+
+    if [[ -n "$selection" ]]; then
+        name=$(trim "${selection%% | *}")
+        url=$(trim "${selection##* | }")
+        play_station "$name" "$url"
+    fi
+}
+
+save_favorite() {
+    local name="$1"
+    local url="$2"
+    touch "$FAV_FILE"
+    
+    name="${name//|/-}"
+    
+    if grep -qF "$url" "$FAV_FILE" >/dev/null; then
+        echo -e "${CYAN}⭐ Station is already in your favorites!${NC}"
+    else
+        echo "$name | $url" >> "$FAV_FILE"
+        echo -e "${GREEN}⭐ Saved to your library!${NC}"
+    fi
+    sleep 1.5
+}
+
+# --- The Player Engine ---
+play_station() {
+    local name="$1"
+    local url="$2"
+    local display_url="$url"
+
+    # Truncate extremely long URLs for UI neatness (keeping the real URL intact for mpv)
+    if [[ ${#display_url} -gt 65 ]]; then
+        display_url="${display_url:0:62}..."
+    fi
+
+    clear
+    echo -e "${BLUE}╭──────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${BLUE}│${NC}  ${GREEN}▶${NC}  ${BOLD}NOW PLAYING${NC}                                              ${BLUE}│${NC}"
+    echo -e "${BLUE}├──────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "   ${BOLD}🎶 Station:${NC} ${YELLOW}$name${NC}"
+    echo -e "   ${BOLD}🌍 Stream :${NC} ${CYAN}$display_url${NC}"
+    echo -e "${BLUE}╰──────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${CYAN}Controls:${NC} ${BOLD}[q]${NC} or ${BOLD}[Ctrl+C]${NC} to Stop  |  ${BOLD}[9/0]${NC} Volume\n"
+    
+    mpv --no-video --user-agent="$USER_AGENT" --msg-level=all=no --msg-level=cplayer=info "$url"
+
+    if grep -qF "$url" "$FAV_FILE" 2>/dev/null; then
+        echo -e "\n${CYAN}⏹  Playback stopped. ${YELLOW}(⭐ Saved in Library)${NC}"
+        sleep 1.5
+    else
+        echo -e "\n${CYAN}⏹  Playback stopped.${NC}"
+        read -r -t 5 -n 1 -p "⭐ Would you like to bookmark this station? (y/N): " add_fav
+        echo ""
+        
+        if [[ "$add_fav" == [yY] ]]; then
+            save_favorite "$name" "$url"
+        fi
+    fi
+}
+
+# --- The Search Engine ---
+run_search() {
+    local search_type="$1"
+    local prompt_label="$2"
+    local term data list selection url name name_part
+    
+    echo -ne "${NC}"
+    read -r -p "🔍 Enter $prompt_label: " term
+    if [[ -z "$term" ]]; then return; fi
+
+    tput civis
+    echo -e "${CYAN}📡 Searching global directory for ${YELLOW}'$term'${CYAN}...${NC}"
+    
+    data=$(curl -s -L -A "$USER_AGENT" \
+        --get \
+        --data-urlencode "${search_type}=${term}" \
+        --data "limit=150" \
+        --data "order=clickcount" \
+        --data "reverse=true" \
+        --data "hidebroken=true" \
+        "$SELECTED_HOST/json/stations/search")
+    
+    if [[ -z "$data" || $(echo "$data" | jq '. | length') -eq 0 ]]; then
+        echo -e "${RED}❌ No stations found for '$term'.${NC}"
+        tput cnorm; sleep 2; return
+    fi
+
+    list=$(echo "$data" | jq -r '
+        .[] | 
+        "\(.name | gsub("\\|"; "-") | gsub("\n";""))\t|\t\(.countrycode | if . == "" or . == null then "??" else . end)\t|\t\(.bitrate // 0)k\t|\t\(.tags | if . == "" or . == null then "general" else .[0:40] end | gsub("\n";""))~~~\(.url_resolved)"')
+
+    selection=$(echo "$list" | column -t -s $'\t' | fzf --ansi \
+        --prompt="📻 Tune: " \
+        --header="[Enter] Play  |  [Esc] Menu  |  Type to filter" \
+        --color="header:italic:cyan,prompt:green,pointer:magenta,hl:yellow" \
+        --border="rounded" \
+        --layout="reverse" \
+        --info="inline" \
+        --cycle \
+        --delimiter="~~~" \
+        --with-nth=1 \
+        --tiebreak=index)
+
+    tput cnorm
+    
+    if [[ -n "$selection" ]]; then
+        url=$(trim "${selection##*~~~}")
+        name_part="${selection%%~~~*}"
+        name=$(trim "${name_part%% | *}")
+        
+        play_station "$name" "$url"
+    fi
+}
+
+# --- Initialization ---
+clear
+check_system
+get_api
+sleep 0.8
+
+# --- Main Interface ---
+while true; do
+    clear
+    echo -e "${CYAN}   ____  __  __ ____  ____  ${NC}"
+    echo -e "${CYAN}  |  _ \|  \/  |  _ \|  _ \ ${NC}   ${YELLOW}THE UNIVERSAL TUNER${NC}"
+    echo -e "${CYAN}  | |_) | |\/| | |_) | |_) |${NC}   ${MAGENTA}v1.0 Launchpad Edition${NC}"
+    echo -e "${CYAN}  |  __/| |  | |  _ <|  __/ ${NC}   ${BLUE}Powered by Radio-Browser${NC}"
+    echo -e "${CYAN}  |_|   |_|  |_|_| \_\_|    ${NC}"
+    echo -e "${BLUE} ───────────────────────────────────────────────────${NC}"
+    echo
+    echo -e "  ${BOLD}🔍 Search Directory${NC}"
+    echo -e "   ${GREEN}1)${NC} By Station Name  ${CYAN}(e.g., BBC, SomaFM, KEXP)${NC}"
+    echo -e "   ${GREEN}2)${NC} By Genre         ${CYAN}(e.g., Jazz, Lo-Fi, News)${NC}"
+    echo -e "   ${GREEN}3)${NC} By Country       ${CYAN}(e.g., Japan, France)${NC}"
+    echo
+    echo -e "  ${BOLD}⭐ My Library${NC}"
+    echo -e "   ${YELLOW}4)${NC} Saved Favorites  ${CYAN}(Play bookmarked stations)${NC}"
+    echo
+    echo -e "  ${BOLD}⚙️  Options${NC}"
+    echo -e "   ${RED}Q)${NC} Exit PMRP"
+    echo
+    read -r -n 1 -p "  Selection > " choice
+    echo
+
+    case $choice in
+        1) run_search "name" "Station Name" ;;
+        2) run_search "tag" "Genre" ;;
+        3) run_search "country" "Country Name" ;;
+        4) play_favorites ;;
+        q|Q) quit_app ;;
+        *) continue ;;
+    esac
+done
