@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # ========================================================================
-# PMRP-NG: The Launchpad Edition (v1.0) 🏆
+# PMRP-NG: The Takeoff Edition (v1.1) 🎙️
 # The ultimate, accessible, and resilient terminal radio for everybody.
 # Author: hakerdefo
 # Repository: https://github.com/hakerdefo/pmrp-ng
 # License: MIT
 # Year: 2026
 # ========================================================================
+
+# --- Version ---
+VERSION="1.1"
 
 # --- Colors & Typography ---
 RED='\033[0;31m'
@@ -19,12 +22,19 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # --- Configuration ---
-USER_AGENT="PMRP-NG/1.0"
+USER_AGENT="PMRP-NG/${VERSION}"
 SELECTED_HOST=""
-FAV_FILE="$HOME/.pmrp_favorites.txt"
+FZF_BORDER="--border=rounded"
+
+# --- XDG-Compliant Favorites Path ---
+FAV_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pmrp"
+FAV_FILE="$FAV_DIR/favorites.txt"
+
+# Legacy path from v1.0 — used only for one-time migration detection.
+LEGACY_FAV="$HOME/.pmrp_favorites.txt"
 
 # --- Graceful Cleanup ---
-trap 'tput cnorm' EXIT
+trap 'tput cnorm 2>/dev/null' EXIT INT TERM
 
 quit_app() {
     echo -e "\n${GREEN}👋 Exiting PMRP. Thanks for listening!${NC}"
@@ -33,22 +43,112 @@ quit_app() {
 
 # --- Helper Utilities ---
 trim() {
-    echo "$1" | sed 's/^[ \t]*//;s/[ \t]*$//'
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    echo "$s"
+}
+
+# Title-case every word, splitting on both spaces and hyphens.
+title_case() {
+    echo "$1" | awk '{
+        n = split($0, words, " ")
+        out = ""
+        for (i = 1; i <= n; i++) {
+            w = words[i]
+            # Capitalize across hyphens within each space-separated word
+            m = split(w, parts, "-")
+            capped = ""
+            for (j = 1; j <= m; j++) {
+                p = parts[j]
+                if (length(p) > 0)
+                    p = toupper(substr(p,1,1)) tolower(substr(p,2))
+                capped = (j == 1) ? p : capped "-" p
+            }
+            out = (i == 1) ? capped : out " " capped
+        }
+        print out
+    }'
+}
+
+# Truncate a string to max length, appending "..." if trimmed
+truncate_str() {
+    local s="$1"
+    local max="$2"
+    if [[ ${#s} -gt $max ]]; then
+        echo "${s:0:$((max-3))}..."
+    else
+        echo "$s"
+    fi
+}
+
+# Portable fractional sleep.
+psleep() {
+    if ! sleep "$1" 2>/dev/null; then
+        local int_part="${1%.*}"
+        sleep $(( int_part > 0 ? int_part : 1 ))
+    fi
+}
+
+cursor_hide() { tput civis 2>/dev/null; }
+cursor_show() { tput cnorm 2>/dev/null; }
+
+# --- Minimum fzf version check ---
+check_fzf_version() {
+    local fzf_ver major minor
+    fzf_ver=$(fzf --version 2>/dev/null | awk '{print $1}')
+
+    # Guard against empty or non-standard version strings (e.g. dev/git builds).
+    # If we can't parse a clean X.Y version, skip the check rather than error.
+    if [[ -z "$fzf_ver" ]]; then
+        return
+    fi
+
+    major=$(echo "$fzf_ver" | cut -d. -f1)
+    minor=$(echo "$fzf_ver" | cut -d. -f2)
+
+    # Reject non-numeric major/minor (e.g. "0.27-dev" → minor="27-dev")
+    if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
+        return
+    fi
+
+    # --border=rounded requires fzf >= 0.27
+    if [[ "$major" -eq 0 && "$minor" -lt 27 ]]; then
+        echo -e "${YELLOW}⚠️ fzf $fzf_ver detected. Version 0.27+ recommended for best visuals.${NC}"
+        FZF_BORDER=""
+    fi
+}
+
+# --- v1.0 → v1.1 Favorites Migration ---
+# If the legacy ~/.pmrp_favorites.txt exists and no new-path file exists yet,
+# copy it into the XDG location so the user's library arrives intact.
+
+migrate_favorites() {
+    if [[ -f "$LEGACY_FAV" && ! -f "$FAV_FILE" ]]; then
+        cp "$LEGACY_FAV" "$FAV_FILE"
+        local count
+        count=$(wc -l < "$FAV_FILE" | tr -d ' ')
+        echo -e "\n${GREEN}📦 Your favorites have been migrated from v1.0!${NC}"
+        echo -e "   ${CYAN}${count} station(s) moved to: ${BOLD}${FAV_FILE}${NC}"
+        echo -e "   ${YELLOW}Your old file at ~/.pmrp_favorites.txt is untouched.${NC}"
+        echo -e "   ${YELLOW}You may delete it manually when you're ready.${NC}"
+        psleep 4
+    fi
 }
 
 # --- System Check ---
 check_system() {
     local missing=()
-    for cmd in curl jq mpv fzf column; do
+    for cmd in curl jq mpv fzf column awk; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
     done
 
     if [[ ${#missing[@]} -gt 0 ]]; then
-        echo -e "${RED}${BOLD}🛠️  System Check Failed${NC}"
+        echo -e "${RED}${BOLD}🛠️ System Check Failed${NC}"
         echo -e "You are missing some essential tools to run PMRP: ${YELLOW}${missing[*]}${NC}\n"
-        
+
         echo -e "${CYAN}How to fix this:${NC}"
         if command -v apt-get &>/dev/null; then
             echo -e "  Run: ${GREEN}sudo apt-get install ${missing[*]}${NC}"
@@ -58,26 +158,53 @@ check_system() {
             echo -e "  Run: ${GREEN}sudo dnf install ${missing[*]}${NC}"
         elif command -v pacman &>/dev/null; then
             echo -e "  Run: ${GREEN}sudo pacman -S ${missing[*]}${NC}"
+        elif command -v zypper &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo zypper install ${missing[*]}${NC}"
+        elif command -v xbps-install &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo xbps-install -S ${missing[*]}${NC}"
+        elif command -v apk &>/dev/null; then
+            echo -e "  Run: ${GREEN}sudo apk add ${missing[*]}${NC}"
         else
             echo -e "  Please use your package manager to install: ${YELLOW}${missing[*]}${NC}"
         fi
         exit 1
     fi
+
+    check_fzf_version
+
+    # Ensure the favorites directory exists (XDG or fallback path).
+    if ! mkdir -p "$FAV_DIR" 2>/dev/null; then
+        echo -e "${RED}⚠️ Cannot create favorites directory: ${FAV_DIR}${NC}"
+        echo -e "${CYAN}   Check permissions or set XDG_DATA_HOME to a writable path.${NC}"
+        exit 1
+    fi
+
+    # One-time migration from v1.0 legacy path, if applicable.
+    migrate_favorites
 }
 
 # --- Establishing Instant Dynamic Uplink ---
 get_api() {
     echo -ne "${CYAN}🌍 Discovering available radio servers... ${NC}"
-    
+
     local fetched_hosts hosts_to_check=()
-    fetched_hosts=$(curl -s --connect-timeout 30 https://all.api.radio-browser.info/json/servers | jq -r '.[].name' 2>/dev/null)
-    
+    fetched_hosts=$(curl -s --connect-timeout 8 --max-time 15 \
+        https://all.api.radio-browser.info/json/servers \
+        | jq -r '.[].name' 2>/dev/null)
+
     if [[ -n "$fetched_hosts" ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] && hosts_to_check+=("$line")
         done <<< "$fetched_hosts"
     else
-        hosts_to_check=("at1.api.radio-browser.info" "de1.api.radio-browser.info" "de2.api.radio-browser.info" "fi1.api.radio-browser.info" "fr1.api.radio-browser.info" "nl1.api.radio-browser.info")
+        hosts_to_check=(
+            "at1.api.radio-browser.info"
+            "de1.api.radio-browser.info"
+            "de2.api.radio-browser.info"
+            "fi1.api.radio-browser.info"
+            "fr1.api.radio-browser.info"
+            "nl1.api.radio-browser.info"
+        )
     fi
 
     # Fast Native Bash Fisher-Yates Shuffle
@@ -89,13 +216,20 @@ get_api() {
         hosts_to_check[j]="$tmp"
     done
 
+    echo ""
+
+    # Reduced timeouts: connect-timeout 8s, max-time 15s per host.
     local connected=false
     for host in "${hosts_to_check[@]}"; do
-        if curl -s --connect-timeout 30 --max-time 60 "https://$host/json/stats" > /dev/null; then
+        echo -ne "${CYAN}   ↳ Trying ${host}... ${NC}"
+        if curl -s --connect-timeout 8 --max-time 15 \
+            "https://$host/json/stats" > /dev/null; then
             SELECTED_HOST="https://$host"
             connected=true
-            echo -e "${GREEN}Connected! ($host)${NC}"
+            echo -e "${GREEN}Connected!${NC}"
             break
+        else
+            echo -e "${YELLOW}Unreachable.${NC}"
         fi
     done
 
@@ -109,20 +243,27 @@ get_api() {
 play_favorites() {
     if [[ ! -s "$FAV_FILE" ]]; then
         echo -e "${YELLOW}⭐ Your library is empty! Search for a station and save it first.${NC}"
-        sleep 2
+        psleep 2
         return
     fi
 
     local selection url name
+    local fav_tmp
+    fav_tmp=$(mktemp)
+
     selection=$(fzf --ansi \
         --prompt="⭐ Search Favorites: " \
-        --header="[Enter] Play  |  [Esc] Menu" \
+        --header="[Enter] Play  |  [Ctrl-D] Remove  |  [Esc] Menu" \
         --color="header:italic:cyan,prompt:yellow,pointer:magenta,hl:green" \
-        --border="rounded" \
+        $FZF_BORDER \
         --layout="reverse" \
         --info="inline" \
         --cycle \
+        --bind="ctrl-d:execute(echo {} > \"$fav_tmp\" && grep -vxF \"\$(cat \"$fav_tmp\")\" \"$FAV_FILE\" > \"$FAV_FILE.tmp\" && mv \"$FAV_FILE.tmp\" \"$FAV_FILE\")+reload(cat \"$FAV_FILE\" 2>/dev/null || true)" \
         < "$FAV_FILE")
+
+    rm -f "$fav_tmp"
+    cursor_show
 
     if [[ -n "$selection" ]]; then
         name=$(trim "${selection%% | *}")
@@ -135,48 +276,77 @@ save_favorite() {
     local name="$1"
     local url="$2"
     touch "$FAV_FILE"
-    
+
+    # Sanitize name: replace pipes, tabs, and newlines
     name="${name//|/-}"
-    
-    if grep -qF "$url" "$FAV_FILE" >/dev/null; then
+    name="${name//$'\t'/ }"
+    name="${name//$'\n'/}"
+
+    # Anchored duplicate check: match "| <url>" rather than the raw URL string.
+    if grep -qF "| $url" "$FAV_FILE" 2>/dev/null; then
         echo -e "${CYAN}⭐ Station is already in your favorites!${NC}"
     else
         echo "$name | $url" >> "$FAV_FILE"
         echo -e "${GREEN}⭐ Saved to your library!${NC}"
     fi
-    sleep 1.5
+    psleep 1.5
+}
+
+remove_favorite() {
+    local url="$1"
+    if grep -qF "| $url" "$FAV_FILE" 2>/dev/null; then
+        grep -vF "| $url" "$FAV_FILE" > "$FAV_FILE.tmp" && mv "$FAV_FILE.tmp" "$FAV_FILE"
+        echo -e "${YELLOW}🗑️ Removed from your library.${NC}"
+        psleep 1.5
+    fi
 }
 
 # --- The Player Engine ---
 play_station() {
     local name="$1"
     local url="$2"
-    local display_url="$url"
+    local is_saved=false
 
-    # Truncate extremely long URLs for UI neatness (keeping the real URL intact for mpv)
-    if [[ ${#display_url} -gt 65 ]]; then
-        display_url="${display_url:0:62}..."
-    fi
+    # Truncate station name and URL for clean display within the box
+    local display_name display_url
+    display_name=$(truncate_str "$name" 48)
+    display_url=$(truncate_str "$url" 55)
+
+    grep -qF "| $url" "$FAV_FILE" 2>/dev/null && is_saved=true
 
     clear
     echo -e "${BLUE}╭──────────────────────────────────────────────────────────────╮${NC}"
     echo -e "${BLUE}│${NC}  ${GREEN}▶${NC}  ${BOLD}NOW PLAYING${NC}                                              ${BLUE}│${NC}"
     echo -e "${BLUE}├──────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "   ${BOLD}🎶 Station:${NC} ${YELLOW}$name${NC}"
-    echo -e "   ${BOLD}🌍 Stream :${NC} ${CYAN}$display_url${NC}"
+    echo -e "   ${BOLD}🎶 Station:${NC} ${YELLOW}${display_name}${NC}"
+    echo -e "   ${BOLD}🌍 Stream :${NC} ${CYAN}${display_url}${NC}"
     echo -e "${BLUE}╰──────────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${CYAN}Controls:${NC} ${BOLD}[q]${NC} to Stop  |  ${BOLD}[Space]${NC} to Pause  |  ${BOLD}[9/0]${NC} Volume\n"
-    
-    mpv --no-video --user-agent="$USER_AGENT" --msg-level=all=no --msg-level=cplayer=info "$url"
 
-    if grep -qF "$url" "$FAV_FILE" 2>/dev/null; then
-        echo -e "\n${CYAN}⏹  Playback stopped. ${YELLOW}(⭐ Saved in Library)${NC}"
-        sleep 1.5
+    # Use -- to guard against URLs that begin with '-' being misread as mpv flags
+    mpv --no-video --user-agent="$USER_AGENT" --msg-level=all=no --msg-level=cplayer=info -- "$url"
+    local mpv_exit=$?
+
+    # mpv exit codes: 0 = clean stop, 4 = terminated by signal (Ctrl+C)
+    # Any other code indicates an unexpected error (bad URL, stream offline, etc.)
+    if [[ $mpv_exit -ne 0 && $mpv_exit -ne 4 ]]; then
+        echo -e "\n${RED}⚠️ Stream ended unexpectedly (mpv exit code: $mpv_exit).${NC}"
+        echo -e "${CYAN}   The station may be offline or the stream URL may have changed.${NC}"
+        psleep 2
+        return
+    fi
+
+    if [[ "$is_saved" == true ]]; then
+        echo -e "\n${CYAN}⏹ Playback stopped. ${YELLOW}(⭐ Saved in Library)${NC}"
+        read -r -t 5 -n 1 -p "🗑️ Remove this station from your library? (y/N): " rem
+        echo ""
+        if [[ "$rem" == [yY] ]]; then
+            remove_favorite "$url"
+        fi
     else
-        echo -e "\n${CYAN}⏹  Playback stopped.${NC}"
+        echo -e "\n${CYAN}⏹ Playback stopped.${NC}"
         read -r -t 5 -n 1 -p "⭐ Would you like to bookmark this station? (y/N): " add_fav
         echo ""
-        
         if [[ "$add_fav" == [yY] ]]; then
             save_favorite "$name" "$url"
         fi
@@ -188,14 +358,26 @@ run_search() {
     local search_type="$1"
     local prompt_label="$2"
     local term data list selection url name name_part
-    
+
     echo -ne "${NC}"
     read -r -p "🔍 Enter $prompt_label: " term
+
+    # Trim whitespace from user input
+    term=$(trim "$term")
     if [[ -z "$term" ]]; then return; fi
 
-    tput civis
+    # Normalize country names to Title Case for API compatibility.
+    # Uses awk for cross-platform compatibility (GNU + BSD/macOS).
+    # Handles hyphenated names:
+    #   "india" → "India"   "united states" → "United States"
+    #   "saudi-arabia" → "Saudi-Arabia"   "guinea-bissau" → "Guinea-Bissau"
+    if [[ "$search_type" == "country" ]]; then
+        term=$(title_case "$term")
+    fi
+
+    cursor_hide
     echo -e "${CYAN}📡 Searching global directory for ${YELLOW}'$term'${CYAN}...${NC}"
-    
+
     data=$(curl -s -L -A "$USER_AGENT" \
         --get \
         --data-urlencode "${search_type}=${term}" \
@@ -204,21 +386,24 @@ run_search() {
         --data "reverse=true" \
         --data "hidebroken=true" \
         "$SELECTED_HOST/json/stations/search")
-    
+
     if [[ -z "$data" || $(echo "$data" | jq '. | length') -eq 0 ]]; then
         echo -e "${RED}❌ No stations found for '$term'.${NC}"
-        tput cnorm; sleep 2; return
+        cursor_show; psleep 2; return
     fi
 
+    # Use a tab-safe column layout; strip tabs/pipes/newlines from fields
     list=$(echo "$data" | jq -r '
-        .[] | 
-        "\(.name | gsub("\\|"; "-") | gsub("\n";""))\t|\t\(.countrycode | if . == "" or . == null then "??" else . end)\t|\t\(.bitrate // 0)k\t|\t\(.tags | if . == "" or . == null then "general" else .[0:40] end | gsub("\n";""))~~~\(.url_resolved)"')
+        .[] |
+        "\(.name | gsub("[|\t\n]"; " ") | .[0:45])\t|\t\(.countrycode | if . == "" or . == null then "??" else . end)\t|\t\(.bitrate // 0)k\t|\t\(.tags | if . == "" or . == null then "general" else .[0:35] end | gsub("[|\t\n]"; " "))~~~\(.url_resolved)"')
+
+    cursor_show
 
     selection=$(echo "$list" | column -t -s $'\t' | fzf --ansi \
         --prompt="📻 Tune: " \
         --header="[Enter] Play  |  [Esc] Menu  |  Type to filter" \
         --color="header:italic:cyan,prompt:green,pointer:magenta,hl:yellow" \
-        --border="rounded" \
+        $FZF_BORDER \
         --layout="reverse" \
         --info="inline" \
         --cycle \
@@ -226,13 +411,11 @@ run_search() {
         --with-nth=1 \
         --tiebreak=index)
 
-    tput cnorm
-    
     if [[ -n "$selection" ]]; then
         url=$(trim "${selection##*~~~}")
         name_part="${selection%%~~~*}"
         name=$(trim "${name_part%% | *}")
-        
+
         play_station "$name" "$url"
     fi
 }
@@ -241,14 +424,14 @@ run_search() {
 clear
 check_system
 get_api
-sleep 0.8
+psleep 0.8
 
 # --- Main Interface ---
 while true; do
     clear
     echo -e "${CYAN}   ____  __  __ ____  ____  ${NC}"
     echo -e "${CYAN}  |  _ \|  \/  |  _ \|  _ \ ${NC}   ${YELLOW}THE UNIVERSAL TUNER${NC}"
-    echo -e "${CYAN}  | |_) | |\/| | |_) | |_) |${NC}   ${MAGENTA}v1.0 Launchpad Edition${NC}"
+    echo -e "${CYAN}  | |_) | |\/| | |_) | |_) |${NC}   ${MAGENTA}v${VERSION} The Takeoff Edition${NC}"
     echo -e "${CYAN}  |  __/| |  | |  _ <|  __/ ${NC}   ${BLUE}Powered by Radio-Browser${NC}"
     echo -e "${CYAN}  |_|   |_|  |_|_| \_\_|    ${NC}"
     echo -e "${BLUE} ───────────────────────────────────────────────────${NC}"
@@ -256,12 +439,12 @@ while true; do
     echo -e "  ${BOLD}🔍 Search Directory${NC}"
     echo -e "   ${GREEN}1)${NC} By Station Name  ${CYAN}(e.g., BBC, SomaFM, KEXP)${NC}"
     echo -e "   ${GREEN}2)${NC} By Genre         ${CYAN}(e.g., Jazz, Lo-Fi, News)${NC}"
-    echo -e "   ${GREEN}3)${NC} By Country       ${CYAN}(e.g., Japan, France)${NC}"
+    echo -e "   ${GREEN}3)${NC} By Country       ${CYAN}(e.g., Japan, Guinea-Bissau)${NC}"
     echo
     echo -e "  ${BOLD}⭐ My Library${NC}"
-    echo -e "   ${YELLOW}4)${NC} Saved Favorites  ${CYAN}(Play bookmarked stations)${NC}"
+    echo -e "   ${YELLOW}4)${NC} Saved Favorites  ${CYAN}(Play or manage bookmarks)${NC}"
     echo
-    echo -e "  ${BOLD}⚙️  Options${NC}"
+    echo -e "  ${BOLD}⚙️ Options${NC}"
     echo -e "   ${RED}Q)${NC} Exit PMRP"
     echo
     read -r -n 1 -p "  Selection > " choice
